@@ -3,11 +3,11 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require("mongoose");
-const encrypt = require("mongoose-encryption");
+const session = require("express-session");
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 const app = express();
-
-console.log(process.env.API_KEY);
 
 app.use(express.static("public"));
 app.set('view engine', 'ejs');
@@ -15,22 +15,39 @@ app.use(bodyParser.urlencoded({
   extended: true
 }));
 
+//  important to place code here above mongo connect and below setup for express, ejs, and bodyParser
+app.use(session({
+  secret: "Our little secret.",
+  resave: false,
+  saveUninitialized: false
+}));
+
+// use and initializing passport for sessions
+app.use(passport.initialize());
+app.use(passport.session());
+
 mongoose.connect("mongodb://localhost:27017/userDB", {
   useNewUrlParser: true,
   useUnifiedTopology: true
 });
 
-const userSchema = new mongoose.Schema ({
+mongoose.set("useCreateIndex", true);
+
+const userSchema = new mongoose.Schema({
   email: String,
   password: String
 });
 
-
-
-// add encrypt plugin. string key for encryption. Only encypting the password field
-userSchema.plugin(encrypt, { secret: process.env.SECRET, encryptedFields: ["password"] });
+// plugin used to hash and salt our passwords.  Must be used on mongoose schema
+userSchema.plugin(passportLocalMongoose);
 
 const User = new mongoose.model("User", userSchema);
+
+// code to setup and use passport-local-mongoose
+passport.use(User.createStrategy());
+
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 app.get("/", function(req, res) {
   res.render("home");
@@ -40,50 +57,70 @@ app.get("/login", function(req, res) {
   res.render("login");
 });
 
-app.post("/login", function(req, res) {
-  const username = req.body.username;
-  const password = req.body.password;
 
-  User.findOne({
-    // find username that matches user document email
-    email: username
-  }, function(err, foundUser) {
-    if (err) {
-      console.log(err);
-    } else {
-      if (foundUser) {
-        // check password entered with user document password
-        if (foundUser.password === password) {
-          res.render("secrets");
-        }
-      }
-    }
-  });
-});
 
 app.get("/register", function(req, res) {
   res.render("register");
 });
 
-app.post("/register", function(req, res) {
-  // creating document with User model
-  const newUser = new User({
-    email: req.body.username,
-    password: req.body.password
-  });
-// Saving new user document
-  newUser.save(function(err) {
-    if (err) {
-      console.log(err);
-    } else {
-      res.render("secrets");
-    }
-  });
+app.get("/secrets", function(req, res) {
+  // isAuthenticated method from passport
+  if (req.isAuthenticated()) {
+    res.render("secrets");
+  } else {
+    res.redirect("/login");
+  }
 });
 
 app.get("/submit", function(req, res) {
   res.render("submit");
 });
+
+app.get("/logout", function(req, res) {
+  // logout method from passport
+  req.logout();
+  res.redirect("/");
+})
+
+app.post("/register", function(req, res) {
+
+  User.register({
+    username: req.body.username
+  }, req.body.password, function(err, user) {
+    if (err) {
+      console.log(err);
+      res.redirect("/register");
+    } else {
+      // authenciate method from passport
+      passport.authenticate("local")(req, res, function() {
+        res.redirect("/secrets");
+      });
+    }
+  });
+
+});
+
+app.post("/login", function(req, res) {
+
+  const user = new User({
+    username: req.body.username,
+    password: req.body.password
+  })
+  // login method from passport
+  req.login(user, function(err) {
+    if (err) {
+      console.log(err);
+    } else {
+      // authenicate method from passport, creates cookie that user is authenticated and breaks when session ends
+      passport.authenticate("local")(req, res, function() {
+        res.redirect("/secrets");
+      });
+    }
+  });
+
+});
+
+
 
 
 
